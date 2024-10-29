@@ -23,7 +23,7 @@ type Signal struct {
 	count       atomic.Int64
 	ch          chan struct{}
 	boradcast   *Broadcast
-	withHistory bool
+	withHistory int64
 }
 
 func (s *Signal) trigger() {
@@ -99,8 +99,11 @@ func (b *Broadcast) loop() {
 			}
 
 		case reg := <-b.subscribe:
-			if reg.signal.withHistory {
-				reg.signal.count.Store(b.total)
+			if reg.signal.withHistory > -1 {
+				total := b.total - reg.signal.withHistory
+				if total >= 0 {
+					reg.signal.count.Store(total)
+				}
 			}
 			// Add new subscriber
 			b.subscribers[reg.signal] = struct{}{}
@@ -124,12 +127,26 @@ func (b *Broadcast) loop() {
 	}
 }
 
+type SignalOptFunc func(s *Signal)
+
+func WithBufferSize(value int) SignalOptFunc {
+	return func(s *Signal) {
+		s.ch = make(chan struct{}, value)
+	}
+}
+
+func WithHistory(count int64) SignalOptFunc {
+	return func(s *Signal) {
+		s.withHistory = count
+	}
+}
+
 // CreateSignal creates a new signal and subscribes it to the broadcaster
 // bufferSize is the size of the channel buffer, usually 1 is enough but you can increase it if you want to
 // please make sure to test and benchmark it upon increasing the buffer size.
 // withHistory if set to true, the signal will keep track of the number of broadcasts that have happened since it was created
 // this is useful for cases where you want to know how many broadcasts have happened since the signal was created
-func (b *Broadcast) CreateSignal(bufferSize int, withHistory bool) *Signal {
+func (b *Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal {
 	select {
 	case <-b.done:
 		return nil
@@ -137,9 +154,16 @@ func (b *Broadcast) CreateSignal(bufferSize int, withHistory bool) *Signal {
 	}
 
 	s := &Signal{
-		ch:          make(chan struct{}, bufferSize),
 		boradcast:   b,
-		withHistory: withHistory,
+		withHistory: -1,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.ch == nil {
+		s.ch = make(chan struct{}, 1)
 	}
 
 	done := make(chan struct{})
@@ -165,14 +189,28 @@ func (b *Broadcast) Close() {
 	close(b.done)
 }
 
-func NewBroadcast() *Broadcast {
+type BroadCastOptFunc func(b *Broadcast)
+
+func WithInitialTotal(total int64) BroadCastOptFunc {
+	return func(b *Broadcast) {
+		b.total = total
+	}
+}
+
+func NewBroadcast(opts ...BroadCastOptFunc) *Broadcast {
 	b := &Broadcast{
 		subscribers: make(map[*Signal]struct{}),
 		input:       make(chan struct{}),
 		unsubscribe: make(chan *Signal),
 		subscribe:   make(chan *register),
 		done:        make(chan struct{}),
+		total:       0,
 	}
+
+	for _, opt := range opts {
+		opt(b)
+	}
+
 	go b.loop()
 	return b
 }
