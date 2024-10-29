@@ -17,10 +17,10 @@ func TestBasicUsage(t *testing.T) {
 	b := solid.NewBroadcast()
 	defer b.Close()
 
-	s1 := b.CreateSignal(1)
+	s1 := b.CreateSignal(1, false)
 	defer s1.Done()
 
-	b.Broadcast()
+	b.Notify()
 
 	err := s1.Wait(context.Background())
 	if err != nil {
@@ -35,7 +35,7 @@ func TestBlockedUsage(t *testing.T) {
 	b := solid.NewBroadcast()
 	defer b.Close()
 
-	s1 := b.CreateSignal(1)
+	s1 := b.CreateSignal(1, false)
 	defer s1.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -73,10 +73,10 @@ func TestMutlipleSignal(t *testing.T) {
 			}
 			count.Add(1)
 
-		}(b.CreateSignal(1))
+		}(b.CreateSignal(1, false))
 	}
 
-	b.Broadcast()
+	b.Notify()
 
 	wg.Wait()
 
@@ -91,11 +91,11 @@ func TestCountSignal(t *testing.T) {
 	b := solid.NewBroadcast()
 	defer b.Close()
 
-	s := b.CreateSignal(0)
+	s := b.CreateSignal(0, false)
 	defer s.Done()
 
 	for range 1000 {
-		b.Broadcast()
+		b.Notify()
 	}
 
 	for range 1000 {
@@ -113,19 +113,82 @@ func TestCountSignal(t *testing.T) {
 	}
 }
 
+func TestWithHistory(t *testing.T) {
+	t.Parallel()
+
+	b := solid.NewBroadcast()
+	defer b.Close()
+
+	n := 100
+
+	for range n {
+		b.Notify()
+	}
+
+	s := b.CreateSignal(1, true)
+	defer s.Done()
+
+	for range n {
+		err := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+
+			return s.Wait(ctx)
+		}()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	if err := s.Wait(ctx); errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled error but got %v", err)
+	}
+}
+
+func TestErrSignalNotAvailable(t *testing.T) {
+	t.Parallel()
+
+	b := solid.NewBroadcast()
+
+	s := b.CreateSignal(1, false)
+
+	b.Close()
+
+	err := s.Wait(context.Background())
+	if !errors.Is(err, solid.ErrSignalNotAvailable) {
+		t.Fatalf("expected ErrSignalNotAvailable but got %v", err)
+	}
+}
+
+func TestNilSignal(t *testing.T) {
+	t.Parallel()
+
+	b := solid.NewBroadcast()
+	b.Close()
+
+	s := b.CreateSignal(1, false)
+
+	if s != nil {
+		t.Fatalf("expected nil signal but got %v", s)
+	}
+}
+
 func Benchmark1Singal(b *testing.B) {
 	b.ReportAllocs()
 
 	bc := solid.NewBroadcast()
 	defer bc.Close()
 
-	s := bc.CreateSignal(1)
+	s := bc.CreateSignal(1, false)
 	defer s.Done()
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		bc.Broadcast()
+		bc.Notify()
 		s.Wait(context.Background())
 	}
 }
@@ -137,12 +200,12 @@ func BenchmarkBroadcast100Signals(b *testing.B) {
 	defer bc.Close()
 
 	for i := 0; i < 100; i++ {
-		bc.CreateSignal(1)
+		bc.CreateSignal(1, false)
 	}
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		bc.Broadcast()
+		bc.Notify()
 	}
 }
