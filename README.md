@@ -24,13 +24,13 @@ b := solid.NewBroadcast()
 defer b.Close()
 
 // create a signal
-s1 := b.CreateSignal(1)
+s1 := b.CreateSignal(1, false)
 defer s1.Done()
 
-// whenever you call the b.Broadcast()
+// whenever you call the b.Notify()
 // s1.Wait() will unblock. you can have
 // you can have as many signals as you want,
-// and b.Broadcast() calls, all of the signals.Wait
+// and b.Notify() calls, all of the signals.Wait
 // will be unblock
 
 var wg sync.WaitGroup
@@ -42,7 +42,11 @@ go func() {
     s1.Wait(context.Background())
 }()
 
-b.Broadcast()
+b.Notify()
 
 wg.Wait()
 ```
+
+# APIs
+
+solid is consists of two exposed structs one is related to
