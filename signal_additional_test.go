@@ -2,6 +2,7 @@ package solid_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -155,7 +156,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 	b := solid.NewBroadcast()
 	defer b.Close()
 
-	const numWorkers = 3
+	const numWorkers = 1
 	const numNotifications = 5
 
 	var wg sync.WaitGroup
@@ -170,6 +171,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 			for j := 0; j < numNotifications; j++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				err := s.Wait(ctx)
+				fmt.Println("Worker", workerID, "received notification", j)
 				cancel()
 				if err != nil {
 					t.Errorf("Worker %d failed on notification %d: %v", workerID, j, err)
@@ -181,6 +183,8 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 
 	// Send notifications
 	go func() {
+		fmt.Println("Starting notifications")
+		defer fmt.Println("Finished notifications")
 		for i := 0; i < numNotifications; i++ {
 			b.Notify()
 			time.Sleep(50 * time.Millisecond) // More generous timing

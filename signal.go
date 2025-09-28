@@ -8,9 +8,7 @@ import (
 
 var value struct{}
 
-var (
-	ErrSignalNotAvailable = errors.New("signal not available")
-)
+var ErrSignalNotAvailable = errors.New("signal not available")
 
 type register struct {
 	signal *Signal
@@ -27,10 +25,18 @@ type Signal struct {
 }
 
 func (s *Signal) trigger() {
-	select {
-	case s.ch <- value:
-	default:
-		s.count.Add(1)
+	// Use a unified approach: always use count, use channel only for wakeup
+	wasZero := s.count.Add(1) == 1
+
+	// If this was the first notification (count went from 0 to 1),
+	// try to wake up a waiting goroutine via channel
+	if wasZero {
+		select {
+		case s.ch <- value:
+			// Successfully sent wakeup signal
+		default:
+			// Channel full, but that's okay since count has the notification
+		}
 	}
 }
 
@@ -52,15 +58,22 @@ func (s *Signal) hasMore() bool {
 // know how many broadcasts have happened since the signal was created. if bloadcasted is closed or Signal is Done
 // it will return ErrSignalNotAvailable
 func (s *Signal) Wait(ctx context.Context) error {
+	// Check if we have pending notifications
 	if s.hasMore() {
 		return nil
 	}
 
+	// Wait for wakeup signal
 	select {
 	case _, ok := <-s.ch:
 		if !ok {
 			return ErrSignalNotAvailable
 		}
+		// Channel received, now consume from count
+		if s.hasMore() {
+			return nil
+		}
+		// This shouldn't happen with our new trigger logic, but handle gracefully
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
