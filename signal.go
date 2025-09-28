@@ -22,7 +22,7 @@ type Signal struct {
 	// that have been broadcasted
 	count       atomic.Int64
 	ch          chan struct{}
-	boradcast   *Broadcast
+	broadcast   *Broadcast
 	withHistory int64
 }
 
@@ -69,7 +69,12 @@ func (s *Signal) Wait(ctx context.Context) error {
 
 // Done closes the signal and removes it from the broadcaster
 func (s *Signal) Done() {
-	s.boradcast.unsubscribe <- s
+	select {
+	case s.broadcast.unsubscribe <- s:
+		// Successfully sent unsubscribe request
+	case <-s.broadcast.done:
+		// Broadcaster is closed, nothing to do
+	}
 }
 
 type Broadcast struct {
@@ -154,7 +159,7 @@ func (b *Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal {
 	}
 
 	s := &Signal{
-		boradcast:   b,
+		broadcast:   b,
 		withHistory: -1,
 	}
 
@@ -180,8 +185,8 @@ func (b *Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal {
 }
 
 // Notify sends a signal to all subscribers and unblocks all waiting signals
-func (s *Broadcast) Notify() {
-	s.input <- struct{}{}
+func (b *Broadcast) Notify() {
+	b.input <- struct{}{}
 }
 
 // Close closes the broadcaster and all signals
