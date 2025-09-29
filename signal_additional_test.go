@@ -156,7 +156,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 	b := solid.NewBroadcast()
 	defer b.Close()
 
-	const numWorkers = 1
+	const numWorkers = 10 // Increased to actually test concurrency
 	const numNotifications = 5
 
 	var wg sync.WaitGroup
@@ -169,7 +169,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 			defer s.Done()
 
 			for j := 0; j < numNotifications; j++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Increased to 5s for -race overhead
 				err := s.Wait(ctx)
 				fmt.Println("Worker", workerID, "received notification", j)
 				cancel()
@@ -187,7 +187,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 		defer fmt.Println("Finished notifications")
 		for i := 0; i < numNotifications; i++ {
 			b.Notify()
-			time.Sleep(50 * time.Millisecond) // More generous timing
+			time.Sleep(10 * time.Millisecond) // Tighter for stress, but safe post-fix
 		}
 	}()
 
@@ -213,7 +213,7 @@ func TestHistoryEdgeCase(t *testing.T) {
 	defer b.Close()
 
 	// Send exactly 10 notifications
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		b.Notify()
 	}
 

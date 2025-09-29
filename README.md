@@ -27,11 +27,11 @@ defer b.Close()
 s1 := b.CreateSignal(1, false)
 defer s1.Done()
 
-// whenever you call the b.Notify()
-// s1.Wait() will unblock. you can have
-// you can have as many signals as you want,
-// and b.Notify() calls, all of the signals.Wait
-// will be unblock
+// When b.Notify() is called, all signals created from this broadcast
+// will be notified simultaneously. Each signal's Wait() method will
+// unblock, allowing for efficient one-to-many communication patterns.
+// You can create multiple signals and they will all respond to a single
+// Notify() call, making this ideal for coordinating goroutines.
 
 var wg sync.WaitGroup
 
