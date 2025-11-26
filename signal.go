@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 )
 
-var value struct{}
-
 var ErrSignalNotAvailable = errors.New("signal not available")
 
 type register struct {
@@ -28,26 +26,25 @@ func (s *Signal) trigger() {
 	// Always increment count to guarantee notification delivery
 	s.count.Add(1)
 
-	// Always try to send wakeup signal (non-blocking)
-	// This ensures waiting goroutines get woken up even if multiple
-	// notifications arrive concurrently
+	// Non-blocking send to wake up waiting goroutine
 	select {
-	case s.ch <- value:
-		// Successfully sent wakeup signal
+	case s.ch <- struct{}{}:
 	default:
-		// Channel full, but count has the notification so it won't be lost
+		// Channel full, but count is already incremented so notification won't be lost
 	}
 }
 
-func (s *Signal) hasMore() bool {
+// decrement atomically decrements count if > 0, returns true if decremented
+func (s *Signal) decrement() bool {
 	for {
 		current := s.count.Load()
-		if current == 0 {
+		if current <= 0 {
 			return false
 		}
 		if s.count.CompareAndSwap(current, current-1) {
 			return true
 		}
+		// CAS failed, retry - this is rare under normal conditions
 	}
 }
 
@@ -57,22 +54,23 @@ func (s *Signal) hasMore() bool {
 // know how many broadcasts have happened since the base generation. if broadcast is closed or Signal is Done
 // it will return ErrSignalNotAvailable
 func (s *Signal) Wait(ctx context.Context) error {
-	for {
-		// Check if we have pending notifications
-		if s.hasMore() {
-			return nil
-		}
+	// Fast path: check if we already have pending notifications
+	if s.decrement() {
+		return nil
+	}
 
-		// No notifications available, wait for wakeup
+	// Slow path: wait for notification
+	for {
 		select {
 		case _, ok := <-s.ch:
 			if !ok {
 				return ErrSignalNotAvailable
 			}
-			// Got wakeup, loop back to check count again
-			// This handles race conditions where count was incremented
-			// after our hasMore() check but before we entered select
-			continue
+			// Got wakeup signal, try to consume a notification
+			if s.decrement() {
+				return nil
+			}
+			// Spurious wakeup (another goroutine consumed it), wait again
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -123,8 +121,8 @@ func (b *Broadcast) loop() {
 				reg.signal.withHistory = currentTotal
 			}
 
-			// Catch up on any broadcasts since creationGen
-			pending := b.total.Load() - reg.signal.withHistory
+			// Catch up on any broadcasts since withHistory
+			pending := currentTotal - reg.signal.withHistory
 			if pending > 0 {
 				reg.signal.count.Store(pending)
 			}
@@ -173,12 +171,6 @@ func WithHistory(baseGen int64) SignalOptFunc {
 // withHistory if set to a base generation, the signal will catch up on broadcasts since that generation
 // this is useful for cases where you want to know how many broadcasts have happened since a specific point
 func (b *Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal {
-	select {
-	case <-b.done:
-		return nil
-	default:
-	}
-
 	s := &Signal{
 		broadcast:   b,
 		withHistory: 0,
@@ -194,15 +186,18 @@ func (b *Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal {
 
 	done := make(chan struct{})
 
-	b.subscribe <- &register{
+	select {
+	case b.subscribe <- &register{
 		signal: s,
 		done:   done,
+	}:
+		// Successfully sent subscribe request, wait for confirmation
+		<-done
+		return s
+	case <-b.done:
+		// Broadcaster is closed
+		return nil
 	}
-
-	// need to do this to make sure the history and count sets before the signal is returned
-	<-done
-
-	return s
 }
 
 // Notify sends a signal to all subscribers and unblocks all waiting signals
