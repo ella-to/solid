@@ -18,7 +18,7 @@ func TestConcurrentSignalCreation(t *testing.T) {
 	defer b.Close()
 
 	const numSignals = 100
-	signals := make([]*solid.Signal, numSignals)
+	signals := make([]solid.Signal, numSignals)
 	var wg sync.WaitGroup
 
 	// Create signals concurrently

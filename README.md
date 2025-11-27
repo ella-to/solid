@@ -13,23 +13,50 @@
 [![Go Report Card](https://goreportcard.com/badge/ella.to/solid)](https://goreportcard.com/report/ella.to/solid)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**solid** is a high-performance signaling/broadcast library for Go designed to be extremely fast and memory-efficient. The broadcast mechanism is zero-allocation and provides reliable one-to-many communication patterns for coordinating goroutines.
+**solid** is a high-performance signaling/broadcast library for Go designed to be extremely fast and memory-efficient. The broadcast mechanism provides reliable one-to-many communication patterns for coordinating goroutines.
 
 </div>
 
 ## Features
 
-- **Zero-allocation broadcasting**: Efficient memory usage during broadcasts
+- **Two implementations**: Choose between channel-based or sync.Cond-based based on your needs
+- **Interface-based design**: Easy to swap implementations without changing code
 - **Context-aware waiting**: Signals support context cancellation
 - **Historical catch-up**: Signals can catch up on missed broadcasts
 - **Thread-safe**: Safe for concurrent use across multiple goroutines
-- **Buffered channels**: Configurable buffer sizes for different use cases
+- **Zero-allocation fast path**: Efficient memory usage during broadcasts
 
 ## Installation
 
 ```bash
 go get ella.to/solid
 ```
+
+## Choosing an Implementation
+
+solid provides two implementations of the `Broadcast` interface:
+
+| Feature | Channel-based (`NewBroadcast`) | sync.Cond-based (`NewBroadcastCond`) |
+|---------|-------------------------------|--------------------------------------|
+| **Single Signal Throughput** | ~550 ns/op | **~42 ns/op** (13x faster) |
+| **Broadcast to 100 Signals** | ~1,470 ns/op | **~900 ns/op** (40% faster) |
+| **Allocations per Notify** | 0 | 1 (896 bytes) |
+| **Context Cancellation** | Native (efficient) | Spawns goroutine per Wait |
+| **Best For** | General use, frequent cancellation | High throughput, rare cancellation |
+
+### When to use `NewBroadcast` (Channel-based)
+
+- ✅ General-purpose signaling
+- ✅ Frequent context cancellations/timeouts
+- ✅ Zero allocations is critical
+- ✅ Simpler mental model (Go channels)
+
+### When to use `NewBroadcastCond` (sync.Cond-based)
+
+- ✅ Maximum throughput required
+- ✅ High-frequency notify/wait cycles
+- ✅ Context cancellation is rare
+- ✅ Broadcasting to many signals simultaneously
 
 ## Quick Start
 
@@ -45,7 +72,7 @@ import (
 )
 
 func main() {
-    // Create a broadcast engine
+    // Create a broadcast engine (use NewBroadcastCond for higher performance)
     broadcast := solid.NewBroadcast()
     defer broadcast.Close()
 
@@ -75,75 +102,119 @@ func main() {
     broadcast.Notify()
     
     wg.Wait()
-    // Output:
-    // Signal 1 received!
-    // Signal 2 received!
 }
 ```
 
-## Examples
+## Switching Implementations
 
-### Basic Signal Broadcasting
+Since both implementations satisfy the same interfaces, you can easily switch:
 
 ```go
-func basicBroadcasting() {
-    broadcast := solid.NewBroadcast()
-    defer broadcast.Close()
+// Channel-based (general purpose)
+var broadcast solid.Broadcast = solid.NewBroadcast()
 
-    // Create multiple signals
-    signals := make([]*solid.Signal, 5)
-    for i := 0; i < 5; i++ {
-        signals[i] = broadcast.CreateSignal()
-        defer signals[i].Done()
-    }
+// sync.Cond-based (high performance)
+var broadcast solid.Broadcast = solid.NewBroadcastCond()
 
-    var wg sync.WaitGroup
-    wg.Add(len(signals))
+// The rest of your code works identically
+signal := broadcast.CreateSignal()
+defer signal.Done()
 
-    // Start workers waiting for signals
-    for i, signal := range signals {
-        go func(id int, s *solid.Signal) {
-            defer wg.Done()
-            if err := s.Wait(context.Background()); err != nil {
-                fmt.Printf("Worker %d error: %v\n", id, err)
-                return
-            }
-            fmt.Printf("Worker %d activated!\n", id)
-        }(i, signal)
-    }
+broadcast.Notify()
+signal.Wait(context.Background())
+```
 
-    // Broadcast to all workers
-    broadcast.Notify()
-    wg.Wait()
+## API Reference
+
+### Interfaces
+
+#### `Signal`
+
+```go
+type Signal interface {
+    // Wait blocks until a signal is received or the context is done.
+    Wait(ctx context.Context) error
+    
+    // Done closes the signal and removes it from the broadcaster.
+    Done()
 }
 ```
+
+#### `Broadcast`
+
+```go
+type Broadcast interface {
+    // CreateSignal creates a new signal subscribed to the broadcaster.
+    CreateSignal(opts ...SignalOption) Signal
+    
+    // Notify sends a signal to all subscribers.
+    Notify()
+    
+    // Close closes the broadcaster and all signals.
+    Close()
+}
+```
+
+### Constructors
+
+#### `NewBroadcast(opts ...BroadcastOption) Broadcast`
+Creates a new channel-based broadcaster.
+
+#### `NewBroadcastCond(opts ...BroadcastOption) Broadcast`
+Creates a new sync.Cond-based broadcaster (higher performance).
+
+### Options
+
+#### Signal Options
+
+```go
+// WithBufferSize sets the channel buffer size (channel-based only)
+// Default is 1
+signal := broadcast.CreateSignal(solid.WithBufferSize(10))
+
+// WithHistory sets the base generation for historical catch-up
+// - 0 (default): catches up on all historical broadcasts
+// - -1: skips all history (starts fresh)  
+// - N > 0: catches up on broadcasts since generation N
+signal := broadcast.CreateSignal(solid.WithHistory(-1)) // No history
+signal := broadcast.CreateSignal(solid.WithHistory(0))  // All history
+signal := broadcast.CreateSignal(solid.WithHistory(50)) // Since generation 50
+```
+
+#### Broadcast Options
+
+```go
+// WithInitialTotal sets the initial total count
+// Useful for testing or restoring state
+broadcast := solid.NewBroadcast(solid.WithInitialTotal(100))
+```
+
+### Return Values
+
+`Signal.Wait(ctx)` returns:
+- `nil`: Signal received successfully
+- `context.Canceled`: Context was cancelled
+- `context.DeadlineExceeded`: Context deadline exceeded
+- `solid.ErrSignalNotAvailable`: Signal or broadcaster is closed
+
+## Examples
 
 ### Context Cancellation
 
 ```go
-func contextCancellation() {
+func withTimeout() {
     broadcast := solid.NewBroadcast()
     defer broadcast.Close()
 
     signal := broadcast.CreateSignal()
     defer signal.Done()
 
-    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
     defer cancel()
 
-    go func() {
-        time.Sleep(3 * time.Second) // This will timeout
-        broadcast.Notify()
-    }()
-
-    if err := signal.Wait(ctx); err != nil {
-        if err == context.DeadlineExceeded {
-            fmt.Println("Signal wait timed out")
-        } else {
-            fmt.Printf("Signal wait error: %v\n", err)
-        }
-    } else {
-        fmt.Println("Signal received")
+    err := signal.Wait(ctx)
+    if err == context.DeadlineExceeded {
+        fmt.Println("Timed out waiting for signal")
     }
 }
 ```
@@ -151,199 +222,97 @@ func contextCancellation() {
 ### Historical Catch-up
 
 ```go
-func historicalCatchup() {
+func catchUpOnHistory() {
     broadcast := solid.NewBroadcast()
     defer broadcast.Close()
 
-    // Send some notifications before creating signals
-    broadcast.Notify() // count = 1
-    broadcast.Notify() // count = 2
-    broadcast.Notify() // count = 3
-
-    // Create a signal that catches up from the beginning
-    signalWithHistory := broadcast.CreateSignal(solid.WithHistory(0))
-    defer signalWithHistory.Done()
-
-    // Create a signal that only receives future notifications
-    signalNoHistory := broadcast.CreateSignal()
-    defer signalNoHistory.Done()
-
-    // The signal with history will immediately have 3 pending notifications
-    fmt.Println("Checking historical notifications...")
-    for i := 0; i < 3; i++ {
-        if err := signalWithHistory.Wait(context.Background()); err != nil {
-            fmt.Printf("Error: %v\n", err)
-            break
-        }
-        fmt.Printf("Caught up notification %d\n", i+1)
-    }
-
-    // Send a new notification
-    broadcast.Notify()
-
-    // Both signals will receive this new notification
-    var wg sync.WaitGroup
-    wg.Add(2)
-
-    go func() {
-        defer wg.Done()
-        signalWithHistory.Wait(context.Background())
-        fmt.Println("History signal got new notification")
-    }()
-
-    go func() {
-        defer wg.Done()
-        signalNoHistory.Wait(context.Background())
-        fmt.Println("No-history signal got notification")
-    }()
-
-    wg.Wait()
-}
-```
-
-### Custom Buffer Sizes
-
-```go
-func customBufferSizes() {
-    broadcast := solid.NewBroadcast()
-    defer broadcast.Close()
-
-    // Create signals with different buffer sizes
-    unbufferedSignal := broadcast.CreateSignal() // Default buffer size of 1
-    bufferedSignal := broadcast.CreateSignal(solid.WithBufferSize(10))
-    
-    defer unbufferedSignal.Done()
-    defer bufferedSignal.Done()
-
-    // Send multiple rapid notifications
-    for i := 0; i < 5; i++ {
+    // Send notifications before creating signal
+    for i := 0; i < 100; i++ {
         broadcast.Notify()
     }
 
-    // Both signals will handle the notifications appropriately
-    // The buffered signal can handle burst notifications better
-    
-    ctx := context.Background()
-    
-    // Drain notifications from both signals
-    for {
-        err := unbufferedSignal.Wait(ctx)
-        if err != nil {
-            break
-        }
-        fmt.Println("Unbuffered signal received notification")
+    // This signal will have 100 pending notifications
+    signal := broadcast.CreateSignal(solid.WithHistory(0))
+    defer signal.Done()
+
+    // Consume all historical notifications
+    for i := 0; i < 100; i++ {
+        signal.Wait(context.Background())
     }
-    
-    for {
-        err := bufferedSignal.Wait(ctx)
-        if err != nil {
-            break
-        }
-        fmt.Println("Buffered signal received notification")
+}
+```
+
+### Skip History
+
+```go
+func skipHistory() {
+    broadcast := solid.NewBroadcast()
+    defer broadcast.Close()
+
+    // Send notifications before creating signal
+    for i := 0; i < 100; i++ {
+        broadcast.Notify()
     }
+
+    // This signal ignores all historical notifications
+    signal := broadcast.CreateSignal(solid.WithHistory(-1))
+    defer signal.Done()
+
+    // Will block until next Notify() call
+    ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+    defer cancel()
+    
+    err := signal.Wait(ctx) // Will timeout
+    fmt.Println("Timeout:", err == context.DeadlineExceeded)
 }
 ```
 
 ### Worker Pool Coordination
 
 ```go
-func workerPoolCoordination() {
-    broadcast := solid.NewBroadcast()
+func workerPool() {
+    broadcast := solid.NewBroadcastCond() // High performance for many signals
     defer broadcast.Close()
 
-    const numWorkers = 10
-    jobs := make(chan int, 100)
-
-    // Fill job queue
-    for i := 0; i < 50; i++ {
-        jobs <- i
-    }
-    close(jobs)
-
+    const numWorkers = 100
     var wg sync.WaitGroup
     wg.Add(numWorkers)
 
-    // Create worker pool
     for i := 0; i < numWorkers; i++ {
         signal := broadcast.CreateSignal()
-        
-        go func(workerID int, s *solid.Signal) {
+        go func(id int, s solid.Signal) {
             defer wg.Done()
             defer s.Done()
 
-            for {
-                select {
-                case job, ok := <-jobs:
-                    if !ok {
-                        return // No more jobs
-                    }
-                    
-                    // Wait for coordination signal
-                    if err := s.Wait(context.Background()); err != nil {
-                        fmt.Printf("Worker %d error: %v\n", workerID, err)
-                        return
-                    }
-                    
-                    // Process job
-                    fmt.Printf("Worker %d processing job %d\n", workerID, job)
-                    time.Sleep(100 * time.Millisecond) // Simulate work
-                }
-            }
+            s.Wait(context.Background())
+            fmt.Printf("Worker %d started\n", id)
         }(i, signal)
     }
 
-    // Coordinate workers - release them all at once
-    fmt.Println("Starting all workers...")
-    broadcast.Notify()
+    time.Sleep(10 * time.Millisecond) // Let workers start
 
+    // Start all workers simultaneously
+    broadcast.Notify()
     wg.Wait()
-    fmt.Println("All workers completed")
 }
 ```
 
-## API Reference
+## Benchmarks
 
-### Broadcast
+Run benchmarks with:
 
-#### `NewBroadcast(opts ...BroadCastOptFunc) *Broadcast`
-Creates a new broadcast instance.
+```bash
+go test -bench=. -benchmem
+```
 
-**Options:**
-- `WithInitialTotal(total int64)`: Sets the initial total count for the broadcaster
+Example output (Apple M2 Pro):
 
-#### `(*Broadcast) CreateSignal(opts ...SignalOptFunc) *Signal`
-Creates a new signal subscribed to the broadcaster.
-
-**Options:**
-- `WithBufferSize(size int)`: Sets the buffer size for the signal channel (default: 1)
-- `WithHistory(baseGen int64)`: Sets the base generation for historical catch-up
-
-#### `(*Broadcast) Notify()`
-Sends a signal to all subscribers, unblocking all waiting signals.
-
-#### `(*Broadcast) Close()`
-Closes the broadcaster and all associated signals.
-
-### Signal
-
-#### `(*Signal) Wait(ctx context.Context) error`
-Blocks until a signal is received or the context is cancelled.
-
-**Returns:**
-- `nil`: Signal received successfully
-- `context.Canceled`: Context was cancelled
-- `context.DeadlineExceeded`: Context deadline exceeded
-- `ErrSignalNotAvailable`: Signal or broadcaster is closed
-
-#### `(*Signal) Done()`
-Closes the signal and removes it from the broadcaster.
-
-## Performance Characteristics
-
-- **Broadcasting**: O(n) where n is the number of active signals
-- **Memory**: Zero allocations during broadcast operations
-- **Concurrency**: Lock-free implementation using atomic operations
-- **Buffering**: Configurable channel buffer sizes to handle burst notifications
+```
+BenchmarkCond1Signal-12                 27988600    42.45 ns/op     0 B/op    0 allocs/op
+BenchmarkCondBroadcast100Signals-12      1289343   904.7 ns/op    896 B/op    1 allocs/op
+Benchmark1Singal-12                      2166340   554.4 ns/op      0 B/op    0 allocs/op
+BenchmarkBroadcast100Signals-12           825218  1518 ns/op        0 B/op    0 allocs/op
+```
 
 ## License
 

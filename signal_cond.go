@@ -6,29 +6,32 @@ import (
 	"sync/atomic"
 )
 
-type SignalCond struct {
-	count       atomic.Int64 // pending notifications for this signal
+// Compile-time interface check
+var (
+	_ Signal    = (*signalCond)(nil)
+	_ Broadcast = (*broadcastCond)(nil)
+)
+
+type signalCond struct {
+	count       atomic.Int64
 	closed      atomic.Bool
-	broadcast   *BroadcastCond
+	broadcast   *broadcastCond
 	withHistory int64
-
-	// For waiting - we still need cond for blocking
-	mu   sync.Mutex
-	cond *sync.Cond
+	mu          sync.Mutex
+	cond        *sync.Cond
 }
 
-func (s *SignalCond) trigger() {
+func (s *signalCond) trigger() {
 	s.count.Add(1)
-	s.cond.Signal() // Wake up one waiting goroutine
+	s.cond.Signal()
 }
 
-func (s *SignalCond) close() {
+func (s *signalCond) close() {
 	s.closed.Store(true)
-	s.cond.Broadcast() // Wake up all waiting goroutines
+	s.cond.Broadcast()
 }
 
-// decrement atomically decrements count if > 0, returns true if decremented
-func (s *SignalCond) decrement() bool {
+func (s *signalCond) decrement() bool {
 	for {
 		current := s.count.Load()
 		if current <= 0 {
@@ -40,19 +43,15 @@ func (s *SignalCond) decrement() bool {
 	}
 }
 
-// Wait blocks until a signal is received or the context is done
-func (s *SignalCond) Wait(ctx context.Context) error {
-	// Fast path: check if we already have pending notifications
+func (s *signalCond) Wait(ctx context.Context) error {
 	if s.decrement() {
 		return nil
 	}
 
-	// Check if already closed
 	if s.closed.Load() {
 		return ErrSignalNotAvailable
 	}
 
-	// Set up context cancellation watcher
 	cancelled := &atomic.Bool{}
 	stopWatcher := make(chan struct{})
 	go func() {
@@ -65,10 +64,8 @@ func (s *SignalCond) Wait(ctx context.Context) error {
 		}
 	}()
 
-	// Slow path: need to wait
 	s.mu.Lock()
 	for {
-		// Check conditions while holding lock (required for cond.Wait)
 		if s.decrement() {
 			s.mu.Unlock()
 			close(stopWatcher)
@@ -88,19 +85,18 @@ func (s *SignalCond) Wait(ctx context.Context) error {
 	}
 }
 
-// Done closes the signal and removes it from the broadcaster
-func (s *SignalCond) Done() {
+func (s *signalCond) Done() {
 	s.broadcast.unsubscribe(s)
 }
 
-type BroadcastCond struct {
+type broadcastCond struct {
 	mu          sync.RWMutex
 	total       int64
-	subscribers map[*SignalCond]struct{}
+	subscribers map[*signalCond]struct{}
 	closed      atomic.Bool
 }
 
-func (b *BroadcastCond) unsubscribe(s *SignalCond) {
+func (b *broadcastCond) unsubscribe(s *signalCond) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -110,40 +106,25 @@ func (b *BroadcastCond) unsubscribe(s *SignalCond) {
 	}
 }
 
-type SignalCondOptFunc func(s *SignalCond)
-
-func WithCondBufferSize(value int) SignalCondOptFunc {
-	// Buffer size doesn't apply to sync.Cond implementation
-	// Kept for API compatibility
-	return func(s *SignalCond) {}
-}
-
-func WithCondHistory(baseGen int64) SignalCondOptFunc {
-	return func(s *SignalCond) {
-		s.withHistory = baseGen
-	}
-}
-
-// CreateSignal creates a new signal and subscribes it to the broadcaster
-func (b *BroadcastCond) CreateSignal(opts ...SignalCondOptFunc) *SignalCond {
+func (b *broadcastCond) CreateSignal(opts ...SignalOption) Signal {
 	if b.closed.Load() {
 		return nil
 	}
 
-	s := &SignalCond{
+	cfg := defaultSignalConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	s := &signalCond{
 		broadcast:   b,
-		withHistory: 0,
+		withHistory: cfg.withHistory,
 	}
 	s.cond = sync.NewCond(&s.mu)
-
-	for _, opt := range opts {
-		opt(s)
-	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Double-check after acquiring lock
 	if b.closed.Load() {
 		return nil
 	}
@@ -155,7 +136,6 @@ func (b *BroadcastCond) CreateSignal(opts ...SignalCondOptFunc) *SignalCond {
 		s.withHistory = currentTotal
 	}
 
-	// Catch up on any broadcasts since withHistory
 	pending := currentTotal - s.withHistory
 	if pending > 0 {
 		s.count.Store(pending)
@@ -165,12 +145,10 @@ func (b *BroadcastCond) CreateSignal(opts ...SignalCondOptFunc) *SignalCond {
 	return s
 }
 
-// Notify sends a signal to all subscribers
-func (b *BroadcastCond) Notify() {
+func (b *broadcastCond) Notify() {
 	b.mu.Lock()
 	b.total++
-	// Copy subscribers to avoid holding lock during trigger
-	subs := make([]*SignalCond, 0, len(b.subscribers))
+	subs := make([]*signalCond, 0, len(b.subscribers))
 	for s := range b.subscribers {
 		subs = append(subs, s)
 	}
@@ -181,16 +159,15 @@ func (b *BroadcastCond) Notify() {
 	}
 }
 
-// Close closes the broadcaster and all signals
-func (b *BroadcastCond) Close() {
+func (b *broadcastCond) Close() {
 	b.closed.Store(true)
 
 	b.mu.Lock()
-	subs := make([]*SignalCond, 0, len(b.subscribers))
+	subs := make([]*signalCond, 0, len(b.subscribers))
 	for s := range b.subscribers {
 		subs = append(subs, s)
 	}
-	b.subscribers = make(map[*SignalCond]struct{})
+	b.subscribers = make(map[*signalCond]struct{})
 	b.mu.Unlock()
 
 	for _, s := range subs {
@@ -198,22 +175,20 @@ func (b *BroadcastCond) Close() {
 	}
 }
 
-type BroadcastCondOptFunc func(b *BroadcastCond)
-
-func WithCondInitialTotal(total int64) BroadcastCondOptFunc {
-	return func(b *BroadcastCond) {
-		b.total = total
-	}
-}
-
-// NewBroadcastCond creates a new broadcaster instance using sync.Cond
-func NewBroadcastCond(opts ...BroadcastCondOptFunc) *BroadcastCond {
-	b := &BroadcastCond{
-		subscribers: make(map[*SignalCond]struct{}),
-	}
-
+// NewBroadcastCond creates a new sync.Cond-based broadcaster.
+// This implementation uses sync.Cond with atomic operations and is recommended when:
+// - Maximum throughput is required (~42 ns/op per signal, 13x faster than channel-based)
+// - Broadcasting to many signals (~900 ns/op for 100 signals, 40% faster)
+// - Context cancellation is infrequent (spawns a goroutine per Wait call)
+func NewBroadcastCond(opts ...BroadcastOption) Broadcast {
+	cfg := defaultBroadcastConfig()
 	for _, opt := range opts {
-		opt(b)
+		opt(cfg)
+	}
+
+	b := &broadcastCond{
+		total:       cfg.initialTotal,
+		subscribers: make(map[*signalCond]struct{}),
 	}
 
 	return b

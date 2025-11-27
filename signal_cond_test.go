@@ -59,8 +59,8 @@ func TestCondMultipleSignal(t *testing.T) {
 
 	wg.Add(n)
 
-	for i := 0; i < n; i++ {
-		go func(s *solid.SignalCond) {
+	for range n {
+		go func(s solid.Signal) {
 			defer wg.Done()
 			defer s.Done()
 
@@ -121,7 +121,7 @@ func TestCondWithHistoryFromBeginning(t *testing.T) {
 		b.Notify()
 	}
 
-	s := b.CreateSignal(solid.WithCondHistory(0))
+	s := b.CreateSignal(solid.WithHistory(0))
 	defer s.Done()
 
 	for range n {
@@ -156,8 +156,8 @@ func TestCondWithHistoryFromLatest(t *testing.T) {
 		b.Notify()
 	}
 
-	// WithCondHistory(-1) means skip all historical notifications
-	s1 := b.CreateSignal(solid.WithCondHistory(-1))
+	// WithHistory(-1) means skip all historical notifications
+	s1 := b.CreateSignal(solid.WithHistory(-1))
 	defer s1.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -220,9 +220,9 @@ func BenchmarkCond1Signal(b *testing.B) {
 
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		bc.Notify()
-		s.Wait(context.Background())
+		_ = s.Wait(b.Context())
 	}
 }
 

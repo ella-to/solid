@@ -26,7 +26,6 @@ func TestBasicUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 }
 
 func TestBlockedUsage(t *testing.T) {
@@ -62,8 +61,8 @@ func TestMutlipleSignal(t *testing.T) {
 
 	wg.Add(n)
 
-	for i := 0; i < n; i++ {
-		go func(s *solid.Signal) {
+	for range n {
+		go func(s solid.Signal) {
 			defer wg.Done()
 			defer s.Done()
 
@@ -72,7 +71,6 @@ func TestMutlipleSignal(t *testing.T) {
 				t.Error(err)
 			}
 			count.Add(1)
-
 		}(b.CreateSignal())
 	}
 
@@ -258,7 +256,7 @@ func Benchmark1Singal(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		bc.Notify()
-		s.Wait(context.Background())
+		_ = s.Wait(b.Context())
 	}
 }
 
