@@ -21,8 +21,8 @@ type signalCond struct {
 	cond        *sync.Cond
 }
 
-func (s *signalCond) trigger() {
-	s.count.Add(1)
+func (s *signalCond) trigger(n int64) {
+	s.count.Add(n)
 	s.cond.Signal()
 }
 
@@ -145,9 +145,9 @@ func (b *broadcastCond) CreateSignal(opts ...SignalOption) Signal {
 	return s
 }
 
-func (b *broadcastCond) Notify() {
+func (b *broadcastCond) Notify(n int64) {
 	b.mu.Lock()
-	b.total++
+	b.total += n
 	subs := make([]*signalCond, 0, len(b.subscribers))
 	for s := range b.subscribers {
 		subs = append(subs, s)
@@ -155,7 +155,7 @@ func (b *broadcastCond) Notify() {
 	b.mu.Unlock()
 
 	for _, s := range subs {
-		s.trigger()
+		s.trigger(n)
 	}
 }
 

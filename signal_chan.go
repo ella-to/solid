@@ -23,8 +23,8 @@ type signalChan struct {
 	withHistory int64
 }
 
-func (s *signalChan) trigger() {
-	s.count.Add(1)
+func (s *signalChan) trigger(n int64) {
+	s.count.Add(n)
 	select {
 	case s.ch <- struct{}{}:
 	default:
@@ -85,7 +85,7 @@ func (b *broadcastChan) loop() {
 		case <-b.input:
 			b.total.Add(1)
 			for s := range b.subscribers {
-				s.trigger()
+				s.trigger(1)
 			}
 
 		case reg := <-b.subscribe:
@@ -140,8 +140,11 @@ func (b *broadcastChan) CreateSignal(opts ...SignalOption) Signal {
 	}
 }
 
-func (b *broadcastChan) Notify() {
-	b.input <- struct{}{}
+func (b *broadcastChan) Notify(n int64) {
+	for n > 0 {
+		b.input <- struct{}{}
+		n--
+	}
 }
 
 func (b *broadcastChan) Close() {
@@ -161,7 +164,7 @@ func NewBroadcast(opts ...BroadcastOption) Broadcast {
 
 	b := &broadcastChan{
 		subscribers: make(map[*signalChan]struct{}),
-		input:       make(chan struct{}),
+		input:       make(chan struct{}, cfg.bufferSize),
 		unsubscribe: make(chan *signalChan),
 		subscribe:   make(chan *registerChan),
 		done:        make(chan struct{}),

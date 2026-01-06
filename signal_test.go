@@ -20,7 +20,7 @@ func TestBasicUsage(t *testing.T) {
 	s1 := b.CreateSignal()
 	defer s1.Done()
 
-	b.Notify()
+	b.Notify(1)
 
 	err := s1.Wait(context.Background())
 	if err != nil {
@@ -74,7 +74,7 @@ func TestMutlipleSignal(t *testing.T) {
 		}(b.CreateSignal())
 	}
 
-	b.Notify()
+	b.Notify(1)
 
 	wg.Wait()
 
@@ -93,7 +93,7 @@ func TestCountSignal(t *testing.T) {
 	defer s.Done()
 
 	for range 1000 {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	for range 1000 {
@@ -120,7 +120,7 @@ func TestWithHistoryFromBeginning(t *testing.T) {
 	n := 100
 
 	for range n {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	s := b.CreateSignal(solid.WithHistory(0))
@@ -155,7 +155,7 @@ func TestWithHistoryFromLatest(t *testing.T) {
 	n := 100
 
 	for range n {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	s1 := b.CreateSignal(solid.WithHistory(-1))
@@ -189,7 +189,7 @@ func TestWithHistoryFromN(t *testing.T) {
 	m := 20
 
 	for range n {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	s := b.CreateSignal(solid.WithHistory(int64(m)))
@@ -255,7 +255,7 @@ func Benchmark1Singal(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		bc.Notify()
+		bc.Notify(1)
 		_ = s.Wait(b.Context())
 	}
 }
@@ -273,6 +273,6 @@ func BenchmarkBroadcast100Signals(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		bc.Notify()
+		bc.Notify(1)
 	}
 }

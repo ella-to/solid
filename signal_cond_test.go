@@ -20,7 +20,7 @@ func TestCondBasicUsage(t *testing.T) {
 	s1 := b.CreateSignal()
 	defer s1.Done()
 
-	b.Notify()
+	b.Notify(1)
 
 	err := s1.Wait(t.Context())
 	if err != nil {
@@ -72,7 +72,7 @@ func TestCondMultipleSignal(t *testing.T) {
 		}(b.CreateSignal())
 	}
 
-	b.Notify()
+	b.Notify(1)
 
 	wg.Wait()
 
@@ -91,7 +91,7 @@ func TestCondCountSignal(t *testing.T) {
 	defer s.Done()
 
 	for range 1000 {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	for range 1000 {
@@ -118,7 +118,7 @@ func TestCondWithHistoryFromBeginning(t *testing.T) {
 	n := 100
 
 	for range n {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	s := b.CreateSignal(solid.WithHistory(0))
@@ -153,7 +153,7 @@ func TestCondWithHistoryFromLatest(t *testing.T) {
 	n := 100
 
 	for range n {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	// WithHistory(-1) means skip all historical notifications
@@ -221,7 +221,7 @@ func BenchmarkCond1Signal(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		bc.Notify()
+		bc.Notify(1)
 		_ = s.Wait(b.Context())
 	}
 }
@@ -239,6 +239,6 @@ func BenchmarkCondBroadcast100Signals(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		bc.Notify()
+		bc.Notify(1)
 	}
 }

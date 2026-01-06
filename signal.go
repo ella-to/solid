@@ -29,7 +29,7 @@ type Broadcast interface {
 	CreateSignal(opts ...SignalOption) Signal
 
 	// Notify sends a signal to all subscribers, unblocking any waiting signals.
-	Notify()
+	Notify(n int64)
 
 	// Close closes the broadcaster and all associated signals.
 	// After Close is called, CreateSignal returns nil and all signals return ErrSignalNotAvailable.
@@ -77,11 +77,13 @@ type BroadcastOption func(*broadcastConfig)
 
 type broadcastConfig struct {
 	initialTotal int64
+	bufferSize   int
 }
 
 func defaultBroadcastConfig() *broadcastConfig {
 	return &broadcastConfig{
 		initialTotal: 0,
+		bufferSize:   0,
 	}
 }
 
@@ -90,5 +92,13 @@ func defaultBroadcastConfig() *broadcastConfig {
 func WithInitialTotal(total int64) BroadcastOption {
 	return func(c *broadcastConfig) {
 		c.initialTotal = total
+	}
+}
+
+func WithBroadcastBufferSize(size int) BroadcastOption {
+	return func(c *broadcastConfig) {
+		if size > 0 {
+			c.bufferSize = size
+		}
 	}
 }

@@ -99,7 +99,7 @@ func main() {
     }()
 
     // Notify all signals simultaneously
-    broadcast.Notify()
+    broadcast.Notify(1)
     
     wg.Wait()
 }
@@ -120,7 +120,7 @@ var broadcast solid.Broadcast = solid.NewBroadcastCond()
 signal := broadcast.CreateSignal()
 defer signal.Done()
 
-broadcast.Notify()
+broadcast.Notify(1)
 signal.Wait(context.Background())
 ```
 
@@ -147,8 +147,8 @@ type Broadcast interface {
     // CreateSignal creates a new signal subscribed to the broadcaster.
     CreateSignal(opts ...SignalOption) Signal
     
-    // Notify sends a signal to all subscribers.
-    Notify()
+    // Notify sends n signals to all subscribers.
+    Notify(n int64)
     
     // Close closes the broadcaster and all signals.
     Close()
@@ -227,9 +227,8 @@ func catchUpOnHistory() {
     defer broadcast.Close()
 
     // Send notifications before creating signal
-    for i := 0; i < 100; i++ {
-        broadcast.Notify()
-    }
+    broadcast.Notify(100)
+    
 
     // This signal will have 100 pending notifications
     signal := broadcast.CreateSignal(solid.WithHistory(0))
@@ -250,9 +249,7 @@ func skipHistory() {
     defer broadcast.Close()
 
     // Send notifications before creating signal
-    for i := 0; i < 100; i++ {
-        broadcast.Notify()
-    }
+    broadcast.Notify(100)
 
     // This signal ignores all historical notifications
     signal := broadcast.CreateSignal(solid.WithHistory(-1))
@@ -292,7 +289,7 @@ func workerPool() {
     time.Sleep(10 * time.Millisecond) // Let workers start
 
     // Start all workers simultaneously
-    broadcast.Notify()
+    broadcast.Notify(1)
     wg.Wait()
 }
 ```

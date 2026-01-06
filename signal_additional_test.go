@@ -65,7 +65,7 @@ func TestMultipleWaitCalls(t *testing.T) {
 	defer s.Done()
 
 	// Send one notification
-	b.Notify()
+	b.Notify(1)
 
 	// First wait should succeed immediately
 	err1 := s.Wait(context.Background())
@@ -95,7 +95,7 @@ func TestWithBufferSize(t *testing.T) {
 
 	// Send multiple notifications (more than default buffer)
 	for i := 0; i < 10; i++ {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	// Should be able to consume all notifications
@@ -119,7 +119,7 @@ func TestHistoryWithInitialTotal(t *testing.T) {
 
 	// Add more notifications
 	for i := 0; i < 25; i++ {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	// Create signal with history from the beginning
@@ -186,7 +186,7 @@ func TestConcurrentNotifyAndWait(t *testing.T) {
 		fmt.Println("Starting notifications")
 		defer fmt.Println("Finished notifications")
 		for i := 0; i < numNotifications; i++ {
-			b.Notify()
+			b.Notify(1)
 			time.Sleep(10 * time.Millisecond) // Tighter for stress, but safe post-fix
 		}
 	}()
@@ -214,7 +214,7 @@ func TestHistoryEdgeCase(t *testing.T) {
 
 	// Send exactly 10 notifications
 	for range 10 {
-		b.Notify()
+		b.Notify(1)
 	}
 
 	// Create signal with history from exactly when all notifications happened
