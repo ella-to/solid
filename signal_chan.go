@@ -72,8 +72,9 @@ func (s *signalChan) Done() {
 
 type broadcastChan struct {
 	total       atomic.Int64
+	closed      atomic.Bool
 	subscribers map[*signalChan]struct{}
-	input       chan struct{}
+	input       chan int64
 	unsubscribe chan *signalChan
 	subscribe   chan *registerChan
 	done        chan struct{}
@@ -82,10 +83,10 @@ type broadcastChan struct {
 func (b *broadcastChan) loop() {
 	for {
 		select {
-		case <-b.input:
-			b.total.Add(1)
+		case n := <-b.input:
+			b.total.Add(n)
 			for s := range b.subscribers {
-				s.trigger(1)
+				s.trigger(n)
 			}
 
 		case reg := <-b.subscribe:
@@ -104,8 +105,12 @@ func (b *broadcastChan) loop() {
 			close(reg.done)
 
 		case s := <-b.unsubscribe:
-			delete(b.subscribers, s)
-			close(s.ch)
+			// Idempotent: a second Done() for the same signal must not
+			// close s.ch twice.
+			if _, exists := b.subscribers[s]; exists {
+				delete(b.subscribers, s)
+				close(s.ch)
+			}
 
 		case <-b.done:
 			for s := range b.subscribers {
@@ -141,21 +146,29 @@ func (b *broadcastChan) CreateSignal(opts ...SignalOption) Signal {
 }
 
 func (b *broadcastChan) Notify(n int64) {
-	for n > 0 {
-		b.input <- struct{}{}
-		n--
+	if n <= 0 {
+		return
+	}
+	select {
+	case b.input <- n:
+	case <-b.done:
+		// Broadcaster is closed; drop the notification instead of blocking
+		// forever on a loop that has exited.
 	}
 }
 
 func (b *broadcastChan) Close() {
-	close(b.done)
+	// Idempotent: only the first Close closes the done channel.
+	if b.closed.CompareAndSwap(false, true) {
+		close(b.done)
+	}
 }
 
 // NewBroadcast creates a new channel-based broadcaster.
 // This implementation uses Go channels for signaling and is recommended when:
-// - You need native context cancellation support
-// - Zero allocations in hot path is important
-// - Moderate throughput is acceptable (~550 ns/op per signal)
+// - You need native context cancellation support (no watcher goroutine)
+// - Zero allocations in the hot path is important
+// - Moderate throughput is acceptable (slower than the sync.Cond implementation)
 func NewBroadcast(opts ...BroadcastOption) Broadcast {
 	cfg := defaultBroadcastConfig()
 	for _, opt := range opts {
@@ -164,7 +177,7 @@ func NewBroadcast(opts ...BroadcastOption) Broadcast {
 
 	b := &broadcastChan{
 		subscribers: make(map[*signalChan]struct{}),
-		input:       make(chan struct{}, cfg.bufferSize),
+		input:       make(chan int64, cfg.bufferSize),
 		unsubscribe: make(chan *signalChan),
 		subscribe:   make(chan *registerChan),
 		done:        make(chan struct{}),

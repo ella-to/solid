@@ -242,37 +242,3 @@ func TestNilSignal(t *testing.T) {
 		t.Fatalf("expected nil signal but got %v", s)
 	}
 }
-
-func Benchmark1Singal(b *testing.B) {
-	b.ReportAllocs()
-
-	bc := solid.NewBroadcast()
-	defer bc.Close()
-
-	s := bc.CreateSignal()
-	defer s.Done()
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		bc.Notify(1)
-		_ = s.Wait(b.Context())
-	}
-}
-
-func BenchmarkBroadcast100Signals(b *testing.B) {
-	b.ReportAllocs()
-
-	bc := solid.NewBroadcast()
-	defer bc.Close()
-
-	for i := 0; i < 100; i++ {
-		bc.CreateSignal()
-	}
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		bc.Notify(1)
-	}
-}

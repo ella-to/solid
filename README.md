@@ -29,7 +29,7 @@
 ## Installation
 
 ```bash
-go get ella.to/solid
+go get ella.to/solid@v0.1.3
 ```
 
 ## Choosing an Implementation

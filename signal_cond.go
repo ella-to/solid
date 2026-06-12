@@ -22,12 +22,20 @@ type signalCond struct {
 }
 
 func (s *signalCond) trigger(n int64) {
+	// The count update must happen under the mutex: a waiter holds the lock
+	// between its last count check and parking in cond.Wait, so updating
+	// under the lock guarantees the waiter either sees the new count or is
+	// already registered with the cond when Signal fires.
+	s.mu.Lock()
 	s.count.Add(n)
+	s.mu.Unlock()
 	s.cond.Signal()
 }
 
 func (s *signalCond) close() {
+	s.mu.Lock()
 	s.closed.Store(true)
+	s.mu.Unlock()
 	s.cond.Broadcast()
 }
 
@@ -52,33 +60,40 @@ func (s *signalCond) Wait(ctx context.Context) error {
 		return ErrSignalNotAvailable
 	}
 
-	cancelled := &atomic.Bool{}
-	stopWatcher := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancelled.Store(true)
-			s.cond.Broadcast()
-		case <-stopWatcher:
-			return
-		}
-	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Only spawn a cancellation watcher when the context can actually be
+	// cancelled; context.Background() and friends return a nil Done channel.
+	var cancelled atomic.Bool
+	if done := ctx.Done(); done != nil {
+		stopWatcher := make(chan struct{})
+		defer close(stopWatcher)
+		go func() {
+			select {
+			case <-done:
+				// Same lost-wakeup protection as trigger/close: update the
+				// flag under the mutex before waking the waiters.
+				s.mu.Lock()
+				cancelled.Store(true)
+				s.mu.Unlock()
+				s.cond.Broadcast()
+			case <-stopWatcher:
+			}
+		}()
+	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for {
 		if s.decrement() {
-			s.mu.Unlock()
-			close(stopWatcher)
 			return nil
 		}
 		if s.closed.Load() {
-			s.mu.Unlock()
-			close(stopWatcher)
 			return ErrSignalNotAvailable
 		}
 		if cancelled.Load() {
-			s.mu.Unlock()
-			close(stopWatcher)
 			return ctx.Err()
 		}
 		s.cond.Wait()
@@ -146,40 +161,41 @@ func (b *broadcastCond) CreateSignal(opts ...SignalOption) Signal {
 }
 
 func (b *broadcastCond) Notify(n int64) {
+	if n <= 0 {
+		return
+	}
+
+	// Triggering while holding b.mu keeps total and subscriber membership
+	// consistent (a signal created at total T sees exactly the notifications
+	// after T, never twice) and avoids allocating a snapshot slice.
+	// Lock order is always b.mu -> s.mu, matching unsubscribe/Close.
 	b.mu.Lock()
 	b.total += n
-	subs := make([]*signalCond, 0, len(b.subscribers))
 	for s := range b.subscribers {
-		subs = append(subs, s)
-	}
-	b.mu.Unlock()
-
-	for _, s := range subs {
 		s.trigger(n)
 	}
+	b.mu.Unlock()
 }
 
 func (b *broadcastCond) Close() {
 	b.closed.Store(true)
 
 	b.mu.Lock()
-	subs := make([]*signalCond, 0, len(b.subscribers))
-	for s := range b.subscribers {
-		subs = append(subs, s)
-	}
+	subs := b.subscribers
 	b.subscribers = make(map[*signalCond]struct{})
 	b.mu.Unlock()
 
-	for _, s := range subs {
+	for s := range subs {
 		s.close()
 	}
 }
 
 // NewBroadcastCond creates a new sync.Cond-based broadcaster.
 // This implementation uses sync.Cond with atomic operations and is recommended when:
-// - Maximum throughput is required (~42 ns/op per signal, 13x faster than channel-based)
-// - Broadcasting to many signals (~900 ns/op for 100 signals, 40% faster)
-// - Context cancellation is infrequent (spawns a goroutine per Wait call)
+// - Maximum throughput is required (faster than the channel-based implementation)
+// - Broadcasting to many signals
+// - Context cancellation is infrequent (a blocking Wait with a cancellable
+//   context spawns a watcher goroutine; non-cancellable contexts do not)
 func NewBroadcastCond(opts ...BroadcastOption) Broadcast {
 	cfg := defaultBroadcastConfig()
 	for _, opt := range opts {
